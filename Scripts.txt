@@ -1,0 +1,77 @@
+Scripts used for bioinformatic analyses and pipeline.
+
+All scripts were run using MobaXterm portal through the HPC cluster provided by Stellenbosch University. The associated programmes used are provided for each script.
+
+Quality control with TrimGalore! V0.4.4
+trim_galore --paired -q 25 --length 50 -a AGATCGGAAGAGCACACGTCTGAACTCCAGTCAC -a2 AGATCGGAAGAGCGTCGTGTAGGGAAAGAGTGT -stringency 10 -e 0.01 p1.read1.fastq p1.read2.fastq
+
+Mapping onto reference genome/sequence with BWA 0.7.13
+bwa index ref.fasta
+bwa mem -R '@RG\tID:pop1\tSM:P1\tLB:library1' ref.fasta p1.read1_trim.fq p1.read2_trim.fq -a -t16 -T20 > p1.sam
+
+Mapping onto reference genome/sequence with Bowtie2
+a) bowtie2-build -f filter1.fasta filter1
+b) bowtie2 -f -N 1 -x filter1 -1 cmrGb42AF.fasta -2 cmrGb42AR.fasta -S 42A.N.sam
+
+Convert SAM to BAM file format, sort BAM files and removal of ambiguos reads in SAMtools 1.3
+samtools view -bS p1_A.sam | samtools sort -o p1_A.sort.bam
+samtools view -b -F 0x0004 -f 0x0002 -q20 -F 0X0008 p2_codmt.sort.bam > p2_mtdna5.sort.bam
+
+Find optimal k-mer lengths for de novo assembly with KmerGenie
+a) Create “Reads.file.txt”
+P1.read1.fq
+P1.read2.fq
+b) kmergenie reads_file.txt
+
+de novo Assembly in SPAdes
+INPUTS="p1.read1_trim.fq p1.read2_trim.fq p2.read1_trim.fq p2.read2_trim.fq p3.read1_trim.fq p3.read2_trim.fq p4.read1_trim.fq p4.read2_trim.fq p5.read1_trim.fq p5.read2_trim.fq p6.read1_trim.fq p6.read2_trim.fq p7.read1_trim.fq p7.read2_trim.fq p8.read1_trim.fq p8.read2_trim.fq"
+spades.py \
+--disable-gzip-output \
+-t 32 \
+-k 19,21,31 \
+--pe1-1 p1.read1_trim.fq --pe1-2 p1.read2_trim.fq \
+--pe2-1 p2.read1_trim.fq --pe2-2 p2.read2_trim.fq \
+-o spades_3
+
+Assessment of mapping statistics with SAMTools
+samtools stats -c 1,1000,1 -q 20 -r ref3.fasta p2_A.sort.NA.bam
+
+Create SAMTools mpileup file with SAMTools
+samtools mpileup -d 10000 -Q 20 -B -f mrefD.fasta p1_.DA.final.bam p2_.DA.final.bam p3_.DA.final.bam p4_.DA.final.bam p5_.DA.final.bam p6_.DA.final.bam p7_.DA.final.bam p8_.DA.final.bam > ALL.mpileup
+
+Conversion of mpileup file format to sync file format with PoPoolation2
+mpileup2sync.pl --fastq-type illumina --min-qual 20 --input ALL.mpileup --output ALL.mtdna.orig.sync
+
+Removal of mtDNA reads from original quality-controlled reads using BBMAP
+filterbyname.sh in=p8.read1_trim.fq in2=p8.read2_trim.fq out=p8.read1_trim.filter.fq out2=p8.read2_trim.filter.fq names=total.list.remove.merged.sam include=f minlen=50
+
+Calculation of regional diversity measures with PoPoolation1 (values for contigs with SNPs only)
+a) perl /apps/PoPoolation/1.2.2/Variance-sliding.pl --fastq-type sanger --measure D --input p1.filter.pileup --min-count 2 --min-coverage 10 --max-coverage 500 --min-qual 10 --pool-size nx2 --window-size 100 --step-size 100 --output p1.filter.210500.D
+b) more p1.filter.210500.D |awk '{if($5!="na"&&$3!="0")print}' > p1.filter.210500.D.ls
+
+Estimation of allele counts from sync files for SNP identification with PoPoolation2
+snp-frequency-diff.pl --input ALL.filter.sync --output-prefix ALL.filter_diff --min-count 4 --min-coverage 20 --max-coverage 500
+
+Creating list of biallelic SNPs only
+more ALL.filter.420500_diff_rc |grep -e "pop" > ALL.filter.420500_diff_pop_rc
+more *rc|awk ‘{if ($4==2) print $1 ‘\t’ $2}’ > biallelic.SNP.list
+Calculating number of biallelic SNPs per pool
+a) more ALL.filter.420500_diff_rc_pop |awk '{if($4==2)print$1"\t"$2"\t"$10"\t"$11"\t"$12"\t"$13"\t"$14"\t"$15"\t"$16"\t"$17}' > ALL.filter.420500.pop.maa.list
+b) more ALL.filter.420500.pop.maa.txt |awk '{if($1!=$2)print$1"\t"$2}' > p1.filter.420500.pop.SNP.A.txt
+c) more p1.filter.420500.pop.SNP.A.txt |awk '{if($1!=0)print}' > p1.filter.420500.pop.SNP.txt
+
+Creating Genepop files
+a) Create GenePop files
+perl /apps/PoPoolation/2.svn204/export/subsample_sync2GenePop.pl \
+--input ALL.sync
+--output ${CHR}pos${POS}.GenePop
+--method fraction \
+--min-count 2 \
+--target-coverage 28 \
+--max-coverage 100 \
+--region ${CHR}:${POS}-${POS} \
+--diploid >>output 2>>errors
+rm ${CHR}pos${POS}.GenePop.params
+fi
+b) Merge Genepop file
+perl ${PBS_O_WORKDIR}/merge.gpop.pl
